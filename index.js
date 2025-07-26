@@ -11,6 +11,7 @@ const adminLogin = require('./admin/login');
 const adminSignup = require('./admin/signup'); 
 const adminAgentRoutes = require('./admin/agents');
 const adminTicketRoutes = require('./admin/tickets');
+const winAmountRoute = require('./game/win-amount');
 
 
 const app = express();
@@ -20,7 +21,7 @@ app.use('/auth', authRoutes);
 app.use('/tickets', ticketRoutes);
 app.use('/agents', verifyEligibility);
 
-
+app.use('/game', winAmountRoute);
 app.use('/admin/agents',verifyAdmin, adminAgentRoutes);
 app.use('/admin/tickets',verifyAdmin, adminTicketRoutes);
 app.get('/auth/verify-admin', verifyAdmin, (req, res) => {

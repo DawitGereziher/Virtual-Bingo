@@ -1,10 +1,11 @@
-// game/bingoSocket.js
 const { Server } = require('socket.io');
 const { format } = require('date-fns');
+const crypto = require('crypto');
+const pool = require('../db/db'); // PG pool connection
 
 const MAX_NUMBER = 75;
-const DRAW_INTERVAL = 7000; // 7 seconds
-const WAIT_AFTER_GAME_MS = 5 * 60 * 1000; // 5 minutes
+const DRAW_INTERVAL = 1000; // 7 seconds
+const WAIT_AFTER_GAME_MS = 1 * 60 * 1000; // 5 minutes
 
 const PATTERNS = ['star', 'cross', 'diagonal', 'corners'];
 const FULL_HOUSE = 'full_house';
@@ -21,9 +22,46 @@ let currentPatternIndex = 0;
 let currentRoundInfo = null;
 let nextRoundInfo = null;
 
-let gameCounter = 1; // Increases each game of the day
-let lastRoundDate = format(new Date(), 'yyyyMMdd'); // Track last date to reset daily
-//--------------------------------------------------
+let gameCounter = 1;
+let lastRoundDate = format(new Date(), 'yyyyMMdd');
+
+// Track verified agents per round
+const verifiedAgents = new Set();
+
+function shufflePatterns(patterns) {
+  const arr = [...patterns];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+//---------------- Ticket sales check ----------------
+
+async function hasSoldEnoughTickets(agentId, roundId) {
+  try {
+    console.log(`🔍 Checking total sales for Agent: ${agentId}, Round: ${roundId}`);
+
+    const query = `
+      SELECT SUM(price) AS total_sales
+      FROM tickets
+      WHERE agent_id = $1 AND round_id = $2
+    `;
+    const values = [agentId.trim(), roundId.trim()];
+    const res = await pool.query(query, values);
+
+    const totalSales = parseFloat(res.rows[0]?.total_sales || '0');
+    console.log(`💰 Agent ${agentId} sold total of $${totalSales} for round ${roundId}`);
+
+    return totalSales >= 215;
+  } catch (error) {
+    console.error('❌ DB error checking ticket sales:', error);
+    return false;
+  }
+}
+
+//---------------- Setup Socket ----------------
 
 function setupBingoSocket(httpServer) {
   io = new Server(httpServer, {
@@ -33,34 +71,101 @@ function setupBingoSocket(httpServer) {
   io.on('connection', (socket) => {
     console.log('📡 Agent connected:', socket.id);
 
-    socket.emit('bingo-state', {
+    socket.on('verify-agent', async ({ agentId }) => {
+  if (!currentRoundInfo?.round_id) {
+    return socket.emit('verification-result', {
+      success: false,
+      message: '⏳ No active round available yet.',
+    });
+  }
+
+  const isEligible = await hasSoldEnoughTickets(agentId, currentRoundInfo.round_id);
+  console.log('Verifying agent:', agentId, 'for round:', currentRoundInfo.round_id);
+
+ if (!isEligible) {
+
+socket.emit('verification-result', {
+  success: false,
+  message: `❌ You must sell tickets totaling at least $215 for round ${currentRoundInfo.round_id} to join.`,
+  currentGame: {
+    roundId: currentRoundInfo.round_id,
+    pattern: currentRoundInfo.pattern,
+  },
+  timeUntilNextRound: (((remainingNumbers.length*1000)+WAIT_AFTER_GAME_MS)/1000),
+});
+
+}
+
+
+ const key = `${agentId.trim()}-${currentRoundInfo.round_id}`;
+verifiedAgents.add(key);
+
+// Save agentId in the socket for later
+socket.agentId = agentId;
+
+
+  socket.emit('verification-result', {
+    success: true,
+    message: `✅ Verified for round ${currentRoundInfo.round_id}.`,
+    data: {
       currentNumber,
       drawnNumbers,
       remainingCount: remainingNumbers.length,
       currentPattern: currentRoundInfo?.pattern || null,
       currentRoundInfo,
       nextRoundInfo,
+    },
+  });
+});
+
+
+    socket.on('get-next-round', () => {
+      const agentId = socket.agentId;
+
+
+      const key = `${agentId.trim()}-${currentRoundInfo.round_id}`;
+      if (!verifiedAgents.has(key)) {
+        return socket.emit('error', 'You must verify ticket sales before accessing game data.');
+      }
+      socket.emit('next-round-info', nextRoundInfo);
+    });
+
+    socket.on('get-bingo-state', () => {
+      const key = `${agentId.trim()}-${currentRoundInfo.round_id}`;
+      if (!verifiedAgents.has(key)) {
+        return socket.emit('error', 'You must verify ticket sales before accessing game data.');
+      }
+      socket.emit('bingo-state', {
+        currentNumber,
+        drawnNumbers,
+        remainingCount: remainingNumbers.length,
+        currentPattern: currentRoundInfo?.pattern || null,
+        currentRoundInfo,
+        nextRoundInfo,
+      });
     });
 
     socket.on('disconnect', () => {
       console.log('❌ Agent disconnected:', socket.id);
-    });
+     if (socket.agentId && currentRoundInfo?.round_id) {
+  const key = `${socket.agentId.trim()}-${currentRoundInfo.round_id}`;
+  verifiedAgents.delete(key);
+}
 
-    socket.on('get-next-round', () => {
-      socket.emit('next-round-info', nextRoundInfo);
     });
   });
 
   startNewCycle();
 }
 
-// Generate round info with date-based ID and reset counter daily
+//---------------- Round Utilities ----------------
+
 function createRoundInfo(pattern) {
   const now = new Date();
   const currentDate = format(now, 'yyyyMMdd');
 
   if (currentDate !== lastRoundDate) {
-    gameCounter = 1; // new day, reset
+    gameCounter = 1;
     lastRoundDate = currentDate;
   }
 
@@ -69,40 +174,49 @@ function createRoundInfo(pattern) {
   return {
     round_id: roundId,
     pattern,
-    round_start_time: now,
+    round_start_time:  now,
   };
 }
 
-// Start 5-pattern cycle
-function startNewCycle() {
-  const shuffled = [...PATTERNS].sort(() => Math.random() - 0.5);
+function prepareNextCycle() {
+  const shuffled = shufflePatterns(PATTERNS);
   selectedPatterns = [...shuffled.slice(0, 4), FULL_HOUSE];
   currentPatternIndex = 0;
-  console.log('🔄 New pattern cycle:', selectedPatterns);
-
   nextRoundInfo = createRoundInfo(selectedPatterns[currentPatternIndex]);
+}
+
+function startNewCycle() {
+  prepareNextCycle();
   startPatternGame();
 }
 
+//---------------- Game Flow ----------------
+
 function startPatternGame() {
   currentRoundInfo = nextRoundInfo;
-
-  // 🔥 Immediately prepare the next round info
-  const nextPatternIndex = currentPatternIndex + 1;
-  if (nextPatternIndex < selectedPatterns.length) {
-    nextRoundInfo = createRoundInfo(selectedPatterns[nextPatternIndex]);
-  } else {
-    nextRoundInfo = null; // Will be regenerated in startNewCycle
-  }
+  verifiedAgents.clear();
 
   resetGame();
-  const pattern = currentRoundInfo.pattern;
 
+  const pattern = currentRoundInfo.pattern;
   console.log(`🎮 Starting round: ${currentRoundInfo.round_id} with pattern: ${pattern}`);
 
+  // Send game start events
   io.emit('pattern-change', pattern);
   io.emit('round-start', currentRoundInfo);
+  io.emit('round-ready', currentRoundInfo.round_id);
 
+  // 👇 Increment index now (before draw starts)
+  currentPatternIndex++;
+
+  // Prepare next round in advance
+  if (currentPatternIndex < selectedPatterns.length) {
+    nextRoundInfo = createRoundInfo(selectedPatterns[currentPatternIndex]);
+  } else {
+      prepareNextCycle(); 
+  }
+
+  // Start drawing numbers
   drawNext();
 
   drawTimer = setInterval(() => {
@@ -112,13 +226,13 @@ function startPatternGame() {
       console.log(`✅ Game over. Waiting ${WAIT_AFTER_GAME_MS / 1000}s...`);
 
       setTimeout(() => {
-        currentPatternIndex++;
-
+        // If current cycle is over, prepare a new cycle
         if (currentPatternIndex >= selectedPatterns.length) {
-          startNewCycle(); // full cycle done
-        } else {
-          startPatternGame(); // move to next pattern round
+          prepareNextCycle();      // sets selectedPatterns and resets currentPatternIndex = 0
+          currentPatternIndex = 0;
         }
+
+        startPatternGame();
       }, WAIT_AFTER_GAME_MS);
     } else {
       drawNext();
@@ -127,9 +241,10 @@ function startPatternGame() {
 }
 
 
-// Draw next bingo number
+//---------------- Game Mechanics ----------------
+
 function drawNext() {
-  const index = Math.floor(Math.random() * remainingNumbers.length);
+  const index = crypto.randomInt(remainingNumbers.length);
   currentNumber = remainingNumbers[index];
   remainingNumbers.splice(index, 1);
   drawnNumbers.push(currentNumber);
@@ -141,16 +256,15 @@ function drawNext() {
     currentPattern: currentRoundInfo?.pattern || null,
     currentRoundId: currentRoundInfo?.round_id || null,
   });
-
-  console.log('🎱 Drawn:', currentNumber);
 }
 
-// Reset for a new round
 function resetGame() {
   remainingNumbers = Array.from({ length: MAX_NUMBER }, (_, i) => i + 1);
   drawnNumbers = [];
   currentNumber = null;
 }
+
+//---------------- Exports ----------------
 
 module.exports = {
   setupBingoSocket,
