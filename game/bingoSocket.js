@@ -4,8 +4,8 @@ const crypto = require('crypto');
 const pool = require('../db/db'); // PG pool connection
 
 const MAX_NUMBER = 75;
-const DRAW_INTERVAL = 1000; // 7 seconds
-const WAIT_AFTER_GAME_MS = 1 * 60 * 1000; // 5 minutes
+const DRAW_INTERVAL = 10000; // 7 seconds
+const WAIT_AFTER_GAME_MS = 10 * 60 * 1000; // 5 minutes
 
 const PATTERNS = ['star', 'cross', 'diagonal', 'corners'];
 const FULL_HOUSE = 'full_house';
