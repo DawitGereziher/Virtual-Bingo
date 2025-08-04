@@ -91,7 +91,7 @@ socket.emit('verification-result', {
     roundId: currentRoundInfo.round_id,
     pattern: currentRoundInfo.pattern,
   },
-  timeUntilNextRound: (((remainingNumbers.length*1000)+WAIT_AFTER_GAME_MS)/1000),
+  timeUntilNextRound: (((remainingNumbers.length * DRAW_INTERVAL)+WAIT_AFTER_GAME_MS)/1000),
 });
 
 }
