@@ -41,6 +41,7 @@ app.get('/auth/verify-agent', verifyAgent, (req, res) => {
 });
 
 
+app.get('/ping', (req, res) => res.send('pong'));
 
 
 app.use('/admin/login', adminLogin);

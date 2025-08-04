@@ -160,35 +160,58 @@ socket.agentId = agentId;
 
 //---------------- Round Utilities ----------------
 
-function createRoundInfo(pattern) {
+async function createRoundInfo(pattern) {
   const now = new Date();
   const currentDate = format(now, 'yyyyMMdd');
 
   if (currentDate !== lastRoundDate) {
-    gameCounter = 1;
+    gameCounter = 1; // Reset for a new day
     lastRoundDate = currentDate;
+
+    // Fetch the latest round from DB for the new date
+    const query = `
+      SELECT round_id FROM tickets
+      WHERE round_id LIKE $1
+      ORDER BY round_id DESC
+      LIMIT 1
+    `;
+    const datePrefix = `${currentDate}-%`;
+    try {
+      const result = await pool.query(query, [datePrefix]);
+      if (result.rows.length > 0) {
+        const latestRoundId = result.rows[0].round_id;
+        const match = latestRoundId.match(/g(\d+)$/);
+        if (match) {
+          gameCounter = parseInt(match[1], 10) + 1;
+        }
+      }
+    } catch (err) {
+      console.error('❌ Error checking latest round:', err);
+    }
   }
 
   const roundId = `${currentDate}-g${gameCounter++}`;
-
   return {
     round_id: roundId,
     pattern,
-    round_start_time:  now,
+    round_start_time: now,
   };
 }
 
-function prepareNextCycle() {
+
+async function prepareNextCycle() {
   const shuffled = shufflePatterns(PATTERNS);
   selectedPatterns = [...shuffled.slice(0, 4), FULL_HOUSE];
   currentPatternIndex = 0;
-  nextRoundInfo = createRoundInfo(selectedPatterns[currentPatternIndex]);
+  nextRoundInfo = await createRoundInfo(selectedPatterns[currentPatternIndex]);
 }
 
-function startNewCycle() {
-  prepareNextCycle();
+
+async function startNewCycle() {
+  await prepareNextCycle();
   startPatternGame();
 }
+
 
 //---------------- Game Flow ----------------
 
@@ -225,10 +248,10 @@ function startPatternGame() {
       io.emit('game-over', currentRoundInfo);
       console.log(`✅ Game over. Waiting ${WAIT_AFTER_GAME_MS / 1000}s...`);
 
-      setTimeout(() => {
+      setTimeout(async () => {
         // If current cycle is over, prepare a new cycle
         if (currentPatternIndex >= selectedPatterns.length) {
-          prepareNextCycle();      // sets selectedPatterns and resets currentPatternIndex = 0
+          await prepareNextCycle();      // sets selectedPatterns and resets currentPatternIndex = 0
           currentPatternIndex = 0;
         }
 
