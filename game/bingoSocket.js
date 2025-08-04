@@ -209,13 +209,13 @@ async function prepareNextCycle() {
 
 async function startNewCycle() {
   await prepareNextCycle();
-  startPatternGame();
+  await startPatternGame();
 }
 
 
 //---------------- Game Flow ----------------
 
-function startPatternGame() {
+async function startPatternGame() {
   currentRoundInfo = nextRoundInfo;
   verifiedAgents.clear();
 
@@ -234,10 +234,11 @@ function startPatternGame() {
 
   // Prepare next round in advance
   if (currentPatternIndex < selectedPatterns.length) {
-    nextRoundInfo = createRoundInfo(selectedPatterns[currentPatternIndex]);
-  } else {
-      prepareNextCycle(); 
-  }
+  nextRoundInfo = await createRoundInfo(selectedPatterns[currentPatternIndex]);
+} else {
+  await prepareNextCycle();
+}
+
 
   // Start drawing numbers
   drawNext();
@@ -255,7 +256,7 @@ function startPatternGame() {
           currentPatternIndex = 0;
         }
 
-        startPatternGame();
+       await startPatternGame();
       }, WAIT_AFTER_GAME_MS);
     } else {
       drawNext();
